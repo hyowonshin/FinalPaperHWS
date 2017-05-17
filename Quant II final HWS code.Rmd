@@ -1,0 +1,414 @@
+---
+title: "Code Apendix"
+author: 
+- affiliation: University of Illinois at Urbana-Champaign
+  name: Hyo Won Shin
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+geometry: margin=1in
+fontfamily: Crimson Text
+fontsize: 11pt
+bibliography: C:/Users/hyowo/Documents/Political Science 2017/Quant II/ReplicationGG/Finalpaper.bib
+biblio-style: apsr
+output:
+  pdf_document: 
+    fig_caption: yes
+    fig_height: 7
+    fig_width: 7
+    keep_tex: yes
+    template: C:/Users/hyowo/Documents/Political Science 2017/531-explorations/bowersarticletemplate.latex
+---
+
+```{r replication code, eval=FALSE, echo=TRUE, tidy=TRUE}
+## Replication code 
+## Load data
+library(foreign)
+temp <- tempfile()
+download.file("https://github.com/hyowonshin/FinalPaperHWS/blob/master/GerberGreenLarimer_APSR_2008_social_pressure_household_level_stata_output.zip", destfile="GerberGreenLarimer_APSR_2008_social_pressure_household_level_stata_output.zip")
+unzip("GerberGreenLarimer_APSR_2008_social_pressure_household_level_stata_output.zip")
+social1 <- read.dta("GerberGreenLarimer_APSR_2008_social_pressure_household_level_stata_output.dta")
+
+## Table 1
+## list() can't convert from data frame, so make hh_id array#
+hh_id<-social1$hh_id;
+
+## aggregate data for same hh_id, need to do mean and max separately#
+agg_social_mean<-aggregate.data.frame(social1,by=list(hh_id),
+                                      FUN=mean);
+agg_social_max<-aggregate.data.frame(social1,by=list(hh_id),
+                                     FUN=max);
+
+## make a new dataframe of maxes and means#
+socialagg<-data.frame(treatment=agg_social_max$treatment, hh_size=agg_social_max$hh_size, g2002=agg_social_mean$g2002, g2000=agg_social_mean$g2000,p2004=agg_social_mean$p2004,p2002=agg_social_mean$p2002,p2000=agg_social_mean$p2000, sex=agg_social_mean$sex,yob=agg_social_mean$yob);
+
+#summary statistics for Table 1#
+print(by(socialagg,socialagg$treatment,FUN=summary))
+
+####Multinomial logit reported on p.37 of APSR article####
+
+#rescale year of birth since R has convergence issues for continuous data#
+socialagg$yob=(socialagg$yob-min(socialagg$yob))/
+  (max(socialagg$yob)-min(socialagg$yob))
+library(nnet);
+mlogit<-multinom(treatment~hh_size+g2002+
+        g2000+p2004+p2002+p2000+
+        sex+yob,data=socialagg);
+print(summary(mlogit))
+library(lmtest);
+print(lrtest(mlogit))
+rm(list=ls())
+
+####Table 2####
+temp <- tempfile()
+download.file("https://github.com/hyowonshin/FinalPaperHWS/blob/master/GerberGreenLarimer_APSR_2008_social_pressure.zip",destfile="GerberGreenLarimer_APSR_2008_social_pressure.zip")
+unzip("GerberGreenLarimer_APSR_2008_
+      social_pressure.zip")
+social <- read.dta("GerberGreenLarimer_APSR_2008_social_pressure.dta")
+
+table2<-table(social$voted,social$treatment);
+print(table2)
+round(prop.table(table2,2)*100,1)
+
+####Table 3####
+
+#generate "dummy variables" for treatment type#
+treatmentmatrix<-model.matrix(~factor(social$treatment)-1);
+hawthorne<-treatmentmatrix[,2];
+civicduty<-treatmentmatrix[,3];
+neighbors<-treatmentmatrix[,4];
+self<-treatmentmatrix[,5];
+
+####Table 3, model a####
+#linear regression where voter turnout is regressed on 4 treatments.
+#library(Design): the package no longer exists, 
+# therefore, had to change to using the rms package
+library(rms)
+
+#least squares regression, with clustered standard errors 
+#need to keep residuals (x=T)
+#regress_a<-ols(formula=voted~hawthorne+
+#civicduty+neighbors+self,data=social,method="qr",x=T) 
+#No longer works using rms package, therefore, had to alter the code slightly
+social$voted01 <- as.numeric(social$voted=="Yes")
+social$treatmentF <- social$treatment
+social$treatmentF <- relevel(social$treatmentF," Control")
+
+regress_a <- ols(voted01 ~ treatmentF, data=social, method="qr", x=T)
+
+cluster_std_regress_a<-robcov(regress_a,social$hh_id,method=c('efron'));
+print(cluster_std_regress_a)
+
+####Table 3, model b####
+#perform "within" transform for fixed effects
+social$hawthorne <- as.numeric(social$treatmentF==" Hawthorne")
+social$civicduty <- as.numeric(social$treatmentF==" Civic Duty")
+social$neighbors <- as.numeric(social$treatmentF==" Neighbors")
+social$self <- as.numeric(social$treatmentF==" Self")
+social$control<- as.numeric(social$treatmentF==" Control")
+
+hawthorne<-social$hawthorne-ave(social$hawthorne,social$cluster)+
+  mean(social$hawthorne);
+civicduty<-social$civicduty-ave(social$civicduty,social$cluster)+
+  mean(social$civicduty);
+neighbors<-social$neighbors-ave(social$neighbors,social$cluster)+
+  mean(social$neighbors);
+self<-social$self-ave(social$self,social$cluster)+
+  mean(social$self);
+voted01a <-social$voted01-ave(social$voted01,social$cluster)+
+  mean(social$voted01);
+regress_b<-ols(voted01a~hawthorne+civicduty+neighbors+self,
+  method="qr",x=T);
+
+#rescale standard errors to account for different degrees of freedom#
+numobs<-length(hawthorne);
+parameters<-(length(regress_b$var))^.5;
+numfixedeffects<-length(levels(factor(social$cluster)))-1;
+regress_b$var<-regress_b$var*((numobs-parameters)/
+               (numobs-parameters-numfixedeffects))^.5;
+
+#robust clustered errors#
+cluster_std_regress_b<-robcov(regress_b,social$hh_id,method=c('efron'));
+print(cluster_std_regress_b)
+
+####Table 3, model c####
+#includes fixed effects and controls for voting in five recent elections
+social$g2002 <- as.numeric(social$g2002=="yes")
+social$g2000 <- as.numeric(social$g2000=="yes")
+social$p2004 <- as.numeric(social$p2004=="yes")
+social$p2002 <- as.numeric(social$p2002=="yes")
+social$p2000 <- as.numeric(social$p2000=="yes")
+
+g2002<-social$g2002-ave(social$g2002,social$cluster)+
+  mean(social$cluster);
+g2000<-social$g2000-ave(social$g2000,social$cluster)+
+  mean(social$cluster);
+p2004<-social$p2004-ave(social$p2004,social$cluster)+
+  mean(social$cluster);
+p2002<-social$p2002-ave(social$p2002,social$cluster)+
+  mean(social$cluster);
+p2000<-social$p2000-ave(social$p2000,social$cluster)+
+  mean(social$cluster);
+regress_c<-ols(voted01~hawthorne+civicduty+neighbors+
+              self+g2002+g2000+p2004+p2002+p2000,
+              method="qr",x=T);
+parameters<-(length(regress_c$var))^.5;
+regress_c$var<-regress_c$var*((numobs-parameters)/
+              (numobs-parameters-numfixedeffects))^.5;
+
+#robust clustered errors with degrees of freedom adjustment#
+cluster_std_regress_c<-robcov(regress_c,social$hh_id,method=c('efron'));
+print(cluster_std_regress_c)
+```
+
+```{r test for bias eval=FALSE,tidy=TRUE}
+## Subsetting data for neigborhood and control group
+socialN <- subset(social, social$treatmentF %in% c(" Control", " Neighbors"))
+testcoef <- ols(voted01~treatmentF, data=socialN)
+#tau: true effect 
+tau <-mean(socialN$voted01[socialN$treatmentF%in%" Neighbors"])-mean(socialN$voted01[socialN$treatmentF%in%" Control"])
+tau # true treatment effect of 0.08130991
+
+# Filling in the blanks for outcomes and creating a world of known effects 
+socialN$y0=ifelse(socialN$treatmentF%in%" Control",socialN$voted01,socialN$voted01-tau) 
+#filling in post-treatment for those in control group
+socialN$y1=ifelse(socialN$treatmentF%in%" Neighbors",socialN$voted01,socialN$voted01+tau) 
+#filling in pre-treatment for those in treatment group
+socialN$treatmentnum <- as.numeric(socialN$treatmentF==" Neighbors")
+
+# Function to shuffle explanatory viarable and calculating the coefficients for that shuffled world of known effect 
+permuteFn <- function(){
+  newz <- sample(socialN$treatmentnum)
+  yobz <- with(socialN, newz*y1+(1-newz)*y0) # potential outcomes
+  meandiff <- coef(ols(yobz~newz))[["newz"]] 
+  return(meandiff)
+}
+
+## Repeating this above process 1000 times to produce a distribution of coefficients 
+set.seed(20170909)
+result_bias <- replicate(1000, permuteFn())
+mean(result_bias) 
+## 0.08140758: treatment effect we produced from the world of known effect. This is what we are going to compare to the "truth" or tau
+
+{qqnorm(result_bias/sd(result_bias)) 
+## Observations are very close to the regression line. 
+## This shows that estimator is unbiased. 
+## Also we can see that there aren't any outliers or observations that might skew the outcome. 
+qqline(result_bias/sd(result_bias))}
+
+obscoef<-coef(testcoef)[[2]] #0.08130991: treatment effect using ols()
+pnorm(obscoef,sd=1,mean=0,lower.tail=FALSE) # one-tailed p-value: 0.4675977
+2*(min( c( pnorm(obscoef,sd=1,mean=0),1-pnorm(obscoef,sd=1,mean=0) ))) # two-tailed p-value: 0.9351955 
+# This indicates that in the world of known effect, the treatment effect can be very easily reproduced and it is not attributed to mere chance. This shows that estimator is unbiased and produces the true effect 93.5% of the time. 
+```
+ 
+```{r test for consistency eval=FALSE,tidy=TRUE}
+## Set the sample size to be tested. Start with 100 sample and increase by 400 until we reach 2000 samples. 
+sampn<- seq(from=100, to=2000, by=400)
+alpha <- 0.05 # Standard significance level
+
+## Set number of simulations to run for each sample size
+sims <- 1000
+
+## Outer loop to vary the number of subjects
+for(j in 1:length(sampn)){
+  N <- sampn[j]
+  significant.experiments <- rep(NA, sims)
+  #### Inner loop to conduct experiments "sims" times over for each N ####
+  for (i in 1:sims){
+    ## Randomly generated outcomes for control
+    Y0 <- rnorm(socialN$y0)
+    # Treatment effect as exists in the world of known effects (world of 0 effect)
+    tau <- 0.08130991 # true effect 
+    Y1 <- Y0 + tau
+    newz <- sample(socialN$treatmentnum) # randomly selected explanatory variable
+    y.sim <- Y1*newz + Y0*(1-newz)
+    fit.sim <- ols(y.sim~newz)
+    blah[i] <- coef(fit.sim)[[2]]
+  }
+  ## Check how many of the runs are significant according to alpha
+  blah[j] <- mean(blah)
+}
+
+blah
+
+```
+
+```{r test for type 1 error eval=FALSE,tidy=TRUE}
+library(quantreg)
+library(foreach)
+
+## Create a world of no effect by breaking up the relationship between explanatory and outcome variable.
+repfnRQ<-function(){
+    sim_ci=sort(summary.lm(ols(sample(voted01,replace=FALSE)~treatmentnum,data=socialN))$coefficients[2,2:3]) 
+# this shuffles the outcome variable and regresses it on the explanatory variable, which breaks the relationship between the two. Then I think this function returns one confidence interval from a world of no effect.  
+    truthinci<-sim_ci[1] <= 0 & sim_ci[2]>=0 
+# We want to see whether this confidence interval includes the null effect - this should happen very often since we are testing in the world of no effect 
+# If the ols() produces an estimator that does not commit type 1 error very often, we should see a high instance of correctly accepting the null sinc we are in the world of no effect. It is only 5% (which we have decided prior to running the code) of the time that the estimator is false rejecting the correct null. 
+    return(truthinci)
+}
+
+simulation5a<- function(simulations) {
+  output<-replicate(simulations, repfnRQ())
+  return(output)
+}
+
+results5a<-simulation5a(1000) ## Run 1000 simulations 
+mean(results5a) # 0.505
+1-mean(results5a) # Type 1 error rate: 0.495
+
+simsim<-sapply(1:10,function(i){
+		 theresults<-simulation5a(1000) 
+		 mean(theresults)
+})
+
+simsim 
+# Rate at which we accept the correct null hypothesis
+# 0.496 0.485 0.517 0.508 0.502 0.520 0.483 0.511 0.498 0.486
+
+```
+
+```{r test for power eval=FALSE,tidy=TRUE}
+## Checking power (using CLT based test)
+## Finding our "true average treatment effect" based on difference in means, to decide at what tau we will start our power tests
+ols <- ols(voted01~treatmentF, data=socialN)
+coef(ols)
+summary.lm(ols)
+
+## Taking a sample of 1000 from the socialN dataset, to set n=1000 for power tests
+require(base)
+set.seed(051617)
+newdata <- socialN[sample(nrow(socialN), 1000),] 
+newdata
+
+## Creating a function that will shuffle the outcome variable and apply a chosen tau (treatment effect), before taking a p-value
+require(mosaic)
+repfnols<-function(H){ ## Where H is the hypothesis, the "moving truth"
+  newoutcome<-shuffle(newdata$voted01,replace=FALSE)  
+  sim_t<-summary.lm(ols(I(newoutcome-neighbors*H)~neighbors,data=newdata))$coef[2,3]
+  convert_p<-2*min(pt(sim_t,229442),pt(-sim_t,229442)) # 229442: degrees of freedom 
+  return(convert_p)
+}
+
+## Setting our tau (treatment effect) for our first power test 
+## We'll start with our true effect, as determined using difference in means (ols) above
+simulation<- function(simulations) {
+  output<-replicate(simulations, repfnols(H=0.08130991))
+  return(output)
+}
+results<-simulation(10000)
+## Setting our alpha at 0.05, or a confidence interval of 95%, we are concerned only with p-values that are smaller than 0.05
+power_trueATE<-mean(results<0.05)
+power_trueATE #0.4797
+
+## Let's try some alternate taus to see where we can reach a power of 80%
+simulation<- function(simulations) {
+  output<-replicate(simulations, repfnols(H=0.08530991))
+  return(output)
+}
+results<-simulation(10000)
+power_a<-mean(results<0.05)
+power_a #0.5682
+
+simulation<- function(simulations) {
+  output<-replicate(simulations, repfnols(H=0.099))
+  return(output)
+}
+results<-simulation(10000)
+power_b<-mean(results<0.05)
+power_b #0.701
+
+simulation<- function(simulations) {
+  output<-replicate(simulations, repfnols(H=0.119))
+  return(output)
+}
+results<-simulation(10000)
+power_c<-mean(results<0.05)
+power_c #0.8191
+
+imulation<- function(simulations) {
+  output<-replicate(simulations, repfnols(H=0.117))
+  return(output)
+}
+results<-simulation(10000)
+power_d<-mean(results<0.05)
+power_d #8153
+
+simulation<- function(simulations) {
+  output<-replicate(simulations, repfnols(H=0.116))
+  return(output)
+}
+results<-simulation(10000)
+power_e<-mean(results<0.05)
+power_e #0.8168
+
+```
+
+```{r electoral salience eval=FALSE,tidy=TRUE}
+socialN$general <- socialN$g2000+socialN$g2002
+socialN$primary <- socialN$p2000+socialN$p2002+socialN$p2004
+
+socialN$votep <- with(socialN, ifelse(general>=1 & primary >=1, 1, 
+                      ifelse(general>=1 & primary==0, 2,
+                      ifelse(general==0 & primary>=1, 3,
+                      ifelse(general==0 & primary==0, 4, NA)))))
+
+olsvp <- ols(voted01~treatmentnum+votep, data=socialN)
+coef(olsvp)
+summary.lm(olsvp)
+
+votep1 <- subset(socialN, votep==1)
+mean(votep1[votep1$treatmentnum==1, "voted01"]) - mean(votep1[votep1$treatmentnum==0, "voted01"])
+# 0.0929612
+# Voted for all past five elections
+
+votep2 <- subset(socialN, votep==2)
+mean(votep2[votep2$treatmentnum==1, "voted01"]) - mean(votep2[votep2$treatmentnum==0, "voted01"]) 
+# 0.0591937
+# Voted for general but not primaries 
+
+votep3 <- subset(socialN, votep==3)
+mean(votep3[votep3$treatmentnum==1, "voted01"]) - mean(votep3[votep3$treatmentnum==0, "voted01"])
+# 0.08280332
+# Voted for primaries but not generals
+
+votep4 <- subset(socialN, votep==4)
+mean(votep4[votep4$treatmentnum==1, "voted01"]) - mean(votep4[votep4$treatmentnum==0, "voted01"]) 
+# 0.02396539
+# Did not vote in any past elections
+```
+
+```{r electoral salience 2 eval=FALSE,tidy=TRUE}
+socialS <- subset(social, social$treatmentF %in% c(" Control", " Self"))
+socialS$treatmentnum <- as.numeric(socialS$treatmentF==" Self")
+
+socialS$general <- socialS$g2000+socialS$g2002
+socialS$primary <- socialS$p2000+socialS$p2002+socialS$p2004
+
+socialS$votep <- with(socialS, ifelse(general>=1 & primary >=1, 1, 
+                      ifelse(general>=1 & primary==0, 2,
+                      ifelse(general==0 & primary>=1, 3,
+                      ifelse(general==0 & primary==0, 4, NA)))))
+
+olsvp <- ols(voted01~treatmentnum+votep, data=socialS)
+coef(olsvp)
+summary.lm(olsvp)
+
+votep1S <- subset(socialS, votep==1)
+mean(votep1S[votep1S$treatmentnum==1, "voted01"]) - mean(votep1S[votep1S$treatmentnum==0, "voted01"])
+# 0.0551253
+# Voted for all past five elections
+
+votep2S <- subset(socialS, votep==2)
+mean(votep2S[votep2S$treatmentnum==1, "voted01"]) - mean(votep2S[votep2S$treatmentnum==0, "voted01"]) 
+# 0.04143526
+# Voted for general but not primaries 
+
+votep3S <- subset(socialS, votep==3)
+mean(votep3S[votep3S$treatmentnum==1, "voted01"]) - mean(votep3S[votep3S$treatmentnum==0, "voted01"])
+# 0.02604837
+# Voted for primaries but not generals
+
+votep4S <- subset(socialS, votep==4)
+mean(votep4S[votep4S$treatmentnum==1, "voted01"]) - mean(votep4S[votep4S$treatmentnum==0, "voted01"]) 
+# 0.01372344
+# Did not vote in any past elections
+```
